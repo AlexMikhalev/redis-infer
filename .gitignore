@@ -6,3 +6,4 @@ __pycache__/
 .env
 /target/
 Cargo.lock
+/models/*.gguf

@@ -1,26 +1,22 @@
-use crate::state::model_store;
-use crate::tokens::bytes_to_tokens;
-use infer_engine::llama::generate::{generate, GenerateParams};
-use redis_module::{Context, RedisError, RedisResult, RedisString};
+use crate::state::pool_store;
+use crate::worker::InferRequest;
+use redis_module::{Context, RedisError, RedisResult, RedisString, RedisValue};
 
 /// INFER.GENERATE <token_key> [max_tokens] [temperature]
 ///
-/// Phase 2: blocking single-threaded generation.
-/// Reads pre-tokenized uint32 data from a Redis STRING key,
-/// runs generation, and returns the result.
-///
-/// WARNING: This blocks Redis during inference (10-50 seconds on CPU).
-/// Phase 3 will add non-blocking threaded inference.
+/// Read pre-tokenized uint32 data from a Redis STRING key,
+/// run generation on a worker thread, and return the result.
+/// Redis remains responsive during inference.
 pub fn infer_generate(ctx: &Context, args: Vec<RedisString>) -> RedisResult {
     if args.len() < 2 || args.len() > 4 {
         return Err(RedisError::WrongArity);
     }
 
-    // Check model is loaded
-    let guard = model_store()
+    // Check pool exists (model loaded)
+    let guard = pool_store()
         .read()
-        .map_err(|_| RedisError::Str("ERR model lock poisoned"))?;
-    let model = guard
+        .map_err(|_| RedisError::Str("ERR pool lock poisoned"))?;
+    let pool = guard
         .as_ref()
         .ok_or(RedisError::Str("ERR no model loaded, use INFER.LOAD first"))?;
 
@@ -44,31 +40,26 @@ pub fn infer_generate(ctx: &Context, args: Vec<RedisString>) -> RedisResult {
         0.7
     };
 
-    // Read token data from Redis key
-    let key = ctx.open_key(&args[1]);
-    let data = key
-        .read()
-        .map_err(|e| RedisError::String(format!("ERR reading key: {e}")))?
-        .ok_or(RedisError::Str("ERR key not found or empty"))?;
+    // Copy key name to owned String (args may be freed after command returns)
+    let token_key_name = args[1]
+        .try_as_str()
+        .map_err(|_| RedisError::Str("ERR invalid key name"))?
+        .to_owned();
 
-    let tokens = bytes_to_tokens(data)
-        .map_err(|e| RedisError::String(format!("ERR {e}")))?;
+    // Block the client -- Redis returns immediately, client waits for reply
+    let blocked_client = ctx.block_client();
+    let thread_ctx =
+        redis_module::ThreadSafeContext::with_blocked_client(blocked_client);
 
-    ctx.log_notice(&format!(
-        "redis-infer: generating from {} tokens, max_tokens={}, temp={}",
-        tokens.len(),
-        max_tokens,
-        temperature
-    ));
-
-    let params = GenerateParams {
+    let request = InferRequest {
+        thread_ctx,
+        token_key_name,
         max_tokens,
         temperature,
-        ..Default::default()
     };
 
-    let result = generate(&model.model, &model.backend, &tokens, &params)
-        .map_err(|e| RedisError::String(format!("ERR inference: {e}")))?;
-
-    Ok(result.into())
+    match pool.submit(request) {
+        Ok(()) => Ok(RedisValue::NoReply),
+        Err(e) => Err(RedisError::String(format!("ERR {e}"))),
+    }
 }
