@@ -1,0 +1,15 @@
+[package]
+name = "infer-engine"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = ["llama-cpp"]
+llama-cpp = ["dep:llama-cpp-2"]
+
+[dependencies]
+thiserror.workspace = true
+tracing.workspace = true
+bytemuck.workspace = true
+llama-cpp-2 = { version = "0.1.136", optional = true }

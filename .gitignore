@@ -1,5 +1,8 @@
 *.o
 *.so
+*.dylib
 *.zip
 __pycache__/
 .env
+/target/
+Cargo.lock

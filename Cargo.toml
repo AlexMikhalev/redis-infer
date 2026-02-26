@@ -1,0 +1,22 @@
+[workspace]
+resolver = "2"
+members = ["crates/redis-infer", "crates/infer-engine"]
+default-members = ["crates/redis-infer"]
+
+[workspace.package]
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/terraphim/redis-infer"
+
+[workspace.dependencies]
+thiserror = "2"
+anyhow = "1"
+num_cpus = "1"
+bytemuck = { version = "1", features = ["derive"] }
+tracing = "0.1"
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = 3
+strip = "symbols"
