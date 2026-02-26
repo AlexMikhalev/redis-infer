@@ -9,6 +9,7 @@ pub struct InferModel {
     pub backend: Arc<LlamaBackend>,
     pub model: Arc<LlamaModel>,
     pub model_path: String,
+    pub n_vocab: i32,
 }
 
 impl InferModel {
@@ -33,10 +34,13 @@ impl InferModel {
             }
         })?;
 
+        let n_vocab = model.n_vocab();
+
         Ok(Self {
             backend: Arc::new(backend),
             model: Arc::new(model),
             model_path: path.to_string(),
+            n_vocab,
         })
     }
 }

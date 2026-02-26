@@ -1,6 +1,8 @@
 use redis_module::{redis_module, Context, RedisString, Status};
 
 mod commands;
+mod state;
+mod tokens;
 
 fn init(_ctx: &Context, _args: &[RedisString]) -> Status {
     Status::Ok
@@ -19,5 +21,7 @@ redis_module! {
     deinit: deinit,
     commands: [
         ["infer.info", commands::info::infer_info, "readonly fast", 0, 0, 0],
+        ["infer.load", commands::load::infer_load, "write deny-oom", 0, 0, 0],
+        ["infer.generate", commands::generate::infer_generate, "write", 1, 1, 1],
     ],
 }

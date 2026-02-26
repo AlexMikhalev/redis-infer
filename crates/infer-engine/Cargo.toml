@@ -12,4 +12,5 @@ llama-cpp = ["dep:llama-cpp-2"]
 thiserror.workspace = true
 tracing.workspace = true
 bytemuck.workspace = true
+encoding_rs = "0.8"
 llama-cpp-2 = { version = "0.1.136", optional = true }
