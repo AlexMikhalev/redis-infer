@@ -1,0 +1,5 @@
+*.o
+*.so
+*.zip
+__pycache__/
+.env
