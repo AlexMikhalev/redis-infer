@@ -18,8 +18,8 @@ pub struct InferRequest {
 
 /// A bounded thread pool where each worker owns a pre-created LlamaContext.
 pub struct WorkerPool {
-    sender: mpsc::SyncSender<InferRequest>,
-    _handles: Vec<thread::JoinHandle<()>>,
+    sender: Option<mpsc::SyncSender<InferRequest>>,
+    handles: Vec<thread::JoinHandle<()>>,
     pool_size: usize,
 }
 
@@ -70,8 +70,8 @@ impl WorkerPool {
         }
 
         Self {
-            sender,
-            _handles: handles,
+            sender: Some(sender),
+            handles,
             pool_size,
         }
     }
@@ -149,6 +149,8 @@ impl WorkerPool {
 
     pub fn submit(&self, request: InferRequest) -> Result<(), String> {
         self.sender
+            .as_ref()
+            .ok_or_else(|| "worker pool is shutting down".to_string())?
             .try_send(request)
             .map_err(|_| "all inference workers are busy".to_string())
     }
@@ -160,6 +162,11 @@ impl WorkerPool {
 
 impl Drop for WorkerPool {
     fn drop(&mut self) {
-        // Channel sender is dropped, workers will see Err on recv and exit
+        // Drop sender first -- closes channel so workers see Err on recv and exit
+        self.sender.take();
+        // Join all worker threads to ensure Metal/GPU resources are fully released
+        for handle in self.handles.drain(..) {
+            let _ = handle.join();
+        }
     }
 }
