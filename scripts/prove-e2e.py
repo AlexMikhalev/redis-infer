@@ -41,7 +41,7 @@ def main():
         prompt = "The capital of France is"
 
     print(f"\n--- Step 2: Tokenize with llama-cpp-python ---")
-    tokens = llm.tokenize(prompt.encode("utf-8"), add_bos=True)
+    tokens = llm.tokenize(prompt.encode("utf-8"), add_bos=True, special=True)
     print(f"Prompt: {prompt!r}")
     print(f"Token count: {len(tokens)}")
     print(f"Token IDs: {tokens[:20]}{'...' if len(tokens) > 20 else ''}")
