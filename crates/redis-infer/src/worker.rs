@@ -157,6 +157,19 @@ impl WorkerPool {
             },
         };
 
+        // Log what we're feeding to the model (proof: these are the actual token IDs)
+        let source_label = match &request.source {
+            TokenSource::PreTokenized(k) => format!("PreTokenized({})", k),
+            TokenSource::RawText(k) => format!("RawText({})", k),
+        };
+        eprintln!(
+            "redis-infer: inference source={} n_tokens={} first_8={:?}{}",
+            source_label,
+            tokens.len(),
+            &tokens[..tokens.len().min(8)],
+            if tokens.len() > 8 { "..." } else { "" }
+        );
+
         // Step 2: Run inference (seconds, GIL-free)
         llama_ctx.clear_kv_cache();
 
