@@ -69,16 +69,27 @@ redis-cli INFER.LOAD models/Qwen3-0.6B-Q8_0.gguf 1 4096
 
 ## Key Findings
 
-### Pre-tokenization A/B Test Results
+### Pre-tokenization A/B Test Results (Release Build)
 
-| Prompt Size | Tokens | Pre-tokenized | Runtime | Winner |
-|------------|--------|---------------|---------|--------|
-| SHORT | 27 | 248.7ms | 234.5ms | noise |
-| MEDIUM | 209 | 282.5ms | 280.1ms | noise |
-| LONG | 795 | 449.9ms | 454.9ms | Pre-tok +5ms |
-| VERY LONG | 1826 | 822.6ms | 831.3ms | Pre-tok +9ms |
+| Prompt Size | Tokens | Pre-tokenized (A) | Runtime (B) | Diff | Std Dev A | Std Dev B |
+|------------|--------|-------------------|-------------|------|-----------|-----------|
+| SHORT | 27 | 232.9ms | 232.2ms | noise | 21.5 | 15.9 |
+| MEDIUM | 209 | 277.1ms | 282.5ms | +5.5ms | 7.2 | 5.2 |
+| LONG | 795 | 466.8ms | 464.6ms | noise | 8.6 | 8.9 |
+| VERY LONG | 1826 | 839.2ms | 838.3ms | noise | 9.2 | 10.8 |
 
-Pre-tokenization wins at 800+ tokens. At scale (100 req/s, 1500-token prompts), runtime tokenization burns 93% of a CPU core. Pre-tokenization eliminates that entirely.
+Release build shows dramatically tighter variance (stdev 5-22ms) vs debug (15-43ms). Median times similar because llama.cpp C++ inference dominates wall-clock time regardless of Rust optimization level.
+
+Pre-tokenization value is in **CPU savings at scale**: at 100 req/s with 1500-token prompts, runtime tokenization burns 71.4% of a CPU core (7.14ms/req). Pre-tokenization eliminates this per-request cost entirely -- tokenization happens once during offline indexing.
+
+### Release vs Debug Build
+
+| Metric | Debug | Release |
+|--------|-------|---------|
+| Binary size | 5.1 MB | 2.1 MB |
+| Offline tokenize (1826 tok) | 10.74ms | 7.14ms |
+| Variance (VERY LONG stdev) | 12-43ms | 9-11ms |
+| Median inference (VERY LONG) | 844-861ms | 838-839ms |
 
 ### MLX vs llama.cpp Metal (Qwen3-0.6B)
 
@@ -144,7 +155,7 @@ redis-infer/
 
 ## Possible Next Steps
 
-1. **Production hardening**: Release build (`cargo build --release`), proper error recovery if worker panics, configurable log levels
+1. **Production hardening**: Release build done (`cargo build --release --features system-ggml`, 2.1MB), proper error recovery if worker panics, configurable log levels
 2. **INFER.RAG** (issue #1): Requires Redis Vector Sets module. Pattern: VSIM search -> read token keys -> concatenate -> generate
 3. **Larger models**: Test with Qwen3-4B-Q4_K_M or Llama-3.2-3B for real workloads
 4. **Batch inference**: Support multiple prompts in one command for throughput
@@ -158,11 +169,17 @@ redis-infer/
 ```bash
 cd /Users/alex/projects/terraphim/redis-infer
 
-# Build
+# Build (debug)
 cargo build --features system-ggml
 
-# Start Redis
+# Build (release -- recommended for production)
+cargo build --release --features system-ggml
+
+# Start Redis (debug)
 redis-server --loadmodule target/debug/libredis_infer.dylib
+
+# Start Redis (release)
+redis-server --loadmodule target/release/libredis_infer.dylib
 
 # Load model
 redis-cli INFER.LOAD models/Qwen3-0.6B-Q8_0.gguf 1 4096
