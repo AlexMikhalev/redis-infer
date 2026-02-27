@@ -72,7 +72,7 @@ def main():
 
     # Use llama-cpp-python tokenizer -- produces same token IDs as the GGUF model
     print(f"Loading tokenizer from {args.model}...")
-    llm = Llama(model_path=args.model, n_ctx=0, n_gpu_layers=0, vocab_only=True)
+    llm = Llama(model_path=args.model, n_ctx=32, n_gpu_layers=0, vocab_only=True)
     r = redis.Redis(host=args.redis_host, port=args.redis_port)
     extensions = tuple(args.extensions.split(","))
     repo_path = os.path.abspath(args.repo_path)
