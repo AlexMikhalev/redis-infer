@@ -8,10 +8,15 @@ license.workspace = true
 crate-type = ["cdylib"]
 name = "redis_infer"
 
+[features]
+default = []
+system-ggml = ["infer-engine/system-ggml", "llama-cpp-sys-2/system-ggml"]
+
 [dependencies]
 redis-module = "2.0.7"
 infer-engine = { path = "../infer-engine" }
 llama-cpp-2 = "0.1.136"
+llama-cpp-sys-2 = { version = "0.1.136", optional = true }
 thiserror.workspace = true
 anyhow.workspace = true
 num_cpus.workspace = true
