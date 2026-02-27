@@ -2,17 +2,16 @@ use crate::state::pool_store;
 use crate::worker::{InferRequest, TokenSource};
 use redis_module::{Context, RedisError, RedisResult, RedisString, RedisValue};
 
-/// INFER.GENERATE <token_key> [max_tokens] [temperature]
+/// INFER.GENERATE_TEXT <text_key> [max_tokens] [temperature]
 ///
-/// Read pre-tokenized uint32 data from a Redis STRING key,
-/// run generation on a worker thread, and return the result.
-/// Redis remains responsive during inference.
-pub fn infer_generate(ctx: &Context, args: Vec<RedisString>) -> RedisResult {
+/// Read raw UTF-8 text from a Redis STRING key,
+/// tokenize it at runtime on the worker thread, then run generation.
+/// This is the "Path B" baseline for A/B testing against pre-tokenized INFER.GENERATE.
+pub fn infer_generate_text(ctx: &Context, args: Vec<RedisString>) -> RedisResult {
     if args.len() < 2 || args.len() > 4 {
         return Err(RedisError::WrongArity);
     }
 
-    // Check pool exists (model loaded)
     let guard = pool_store()
         .read()
         .map_err(|_| RedisError::Str("ERR pool lock poisoned"))?;
@@ -40,20 +39,18 @@ pub fn infer_generate(ctx: &Context, args: Vec<RedisString>) -> RedisResult {
         0.7
     };
 
-    // Copy key name to owned String (args may be freed after command returns)
-    let token_key_name = args[1]
+    let text_key_name = args[1]
         .try_as_str()
         .map_err(|_| RedisError::Str("ERR invalid key name"))?
         .to_owned();
 
-    // Block the client -- Redis returns immediately, client waits for reply
     let blocked_client = ctx.block_client();
     let thread_ctx =
         redis_module::ThreadSafeContext::with_blocked_client(blocked_client);
 
     let request = InferRequest {
         thread_ctx,
-        source: TokenSource::PreTokenized(token_key_name),
+        source: TokenSource::RawText(text_key_name),
         max_tokens,
         temperature,
     };

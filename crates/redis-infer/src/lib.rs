@@ -36,5 +36,6 @@ redis_module! {
         ["infer.info", commands::info::infer_info, "readonly fast", 0, 0, 0],
         ["infer.load", commands::load::infer_load, "write deny-oom", 0, 0, 0],
         ["infer.generate", commands::generate::infer_generate, "write", 1, 1, 1],
+        ["infer.generate_text", commands::generate_text::infer_generate_text, "write", 1, 1, 1],
     ],
 }

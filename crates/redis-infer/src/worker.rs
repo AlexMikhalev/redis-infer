@@ -2,16 +2,31 @@ use infer_engine::llama::generate::{generate_with_context, GenerateParams};
 use infer_engine::llama::model::InferModel;
 use infer_engine::tokens::bytes_to_tokens;
 use llama_cpp_2::context::params::LlamaContextParams;
+use llama_cpp_2::model::AddBos;
 use redis_module::{RedisError, RedisValue, ThreadSafeContext};
 use std::num::NonZeroU32;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-/// A request to generate text from pre-tokenized data.
+/// Source of token data for inference.
+pub enum TokenSource {
+    /// Pre-tokenized: read packed uint32 from this Redis key.
+    PreTokenized(String),
+    /// Raw text: read UTF-8 string from this Redis key, tokenize at runtime.
+    RawText(String),
+}
+
+/// Intermediate result from reading Redis key under GIL.
+enum EitherTokens {
+    Tokens(Vec<llama_cpp_2::token::LlamaToken>),
+    Text(String),
+}
+
+/// A request to generate text.
 pub struct InferRequest {
     pub thread_ctx: ThreadSafeContext<redis_module::BlockedClient>,
-    pub token_key_name: String,
+    pub source: TokenSource,
     pub max_tokens: i32,
     pub temperature: f32,
 }
@@ -81,68 +96,87 @@ impl WorkerPool {
         llama_ctx: &mut llama_cpp_2::context::LlamaContext<'_>,
         request: InferRequest,
     ) {
-        // Step 1: Acquire GIL, read token data, copy into owned Vec, release GIL
+        // Step 1: Acquire GIL, read data from Redis, release GIL
         let tokens = {
             let locked_ctx = request.thread_ctx.lock();
-            let key_name = locked_ctx.create_string(request.token_key_name.as_bytes());
-            let key = locked_ctx.open_key(&key_name);
-            match key.read() {
-                Ok(Some(data)) => match bytes_to_tokens(data) {
-                    Ok(tokens) => {
-                        drop(key);
-                        drop(locked_ctx); // Release GIL
-                        Ok(tokens)
+            let key_name = match &request.source {
+                TokenSource::PreTokenized(k) | TokenSource::RawText(k) => k.as_str(),
+            };
+            let rs_key = locked_ctx.create_string(key_name.as_bytes());
+            let key = locked_ctx.open_key(&rs_key);
+            let result = match key.read() {
+                Ok(Some(data)) => {
+                    match &request.source {
+                        TokenSource::PreTokenized(_) => {
+                            // Path A: data is packed uint32 tokens -- just parse
+                            match bytes_to_tokens(data) {
+                                Ok(tokens) => Ok(EitherTokens::Tokens(tokens)),
+                                Err(e) => Err(format!("ERR {e}")),
+                            }
+                        }
+                        TokenSource::RawText(_) => {
+                            // Path B: data is UTF-8 text -- copy to owned String
+                            match std::str::from_utf8(data) {
+                                Ok(text) => Ok(EitherTokens::Text(text.to_owned())),
+                                Err(e) => Err(format!("ERR invalid UTF-8: {e}")),
+                            }
+                        }
                     }
-                    Err(e) => {
-                        drop(key);
-                        drop(locked_ctx);
-                        Err(format!("ERR {e}"))
-                    }
-                },
-                Ok(None) => {
-                    drop(key);
-                    drop(locked_ctx);
-                    Err("ERR key not found or empty".to_string())
                 }
-                Err(e) => {
-                    drop(key);
-                    drop(locked_ctx);
-                    Err(format!("ERR reading key: {e}"))
-                }
-            }
+                Ok(None) => Err("ERR key not found or empty".to_string()),
+                Err(e) => Err(format!("ERR reading key: {e}")),
+            };
+            drop(key);
+            drop(locked_ctx); // Release GIL
+            result
         };
         // GIL is now released. Redis main thread is unblocked.
 
-        match tokens {
+        // Resolve tokens (Path B needs runtime tokenization here, GIL-free)
+        let tokens = match tokens {
             Err(err_msg) => {
                 request
                     .thread_ctx
                     .reply(Err(RedisError::String(err_msg)));
+                return;
             }
-            Ok(tokens) => {
-                // Step 2: Run inference on owned copy (seconds, GIL-free)
-                llama_ctx.clear_kv_cache();
-
-                let params = GenerateParams {
-                    max_tokens: request.max_tokens,
-                    temperature: request.temperature,
-                    ..Default::default()
-                };
-
-                let result =
-                    generate_with_context(llama_ctx, &model.model, &tokens, &params);
-
-                // Step 3: Reply (no GIL needed for reply via ThreadSafeContext)
-                match result {
-                    Ok(text) => {
-                        request.thread_ctx.reply(Ok(RedisValue::BulkString(text)));
-                    }
-                    Err(e) => {
-                        request
-                            .thread_ctx
-                            .reply(Err(RedisError::String(format!("ERR {e}"))));
+            Ok(either) => match either {
+                EitherTokens::Tokens(t) => t,
+                EitherTokens::Text(text) => {
+                    // Runtime tokenization (Path B) -- happens on worker thread, no GIL
+                    match model.model.str_to_token(&text, AddBos::Always) {
+                        Ok(tokens) => tokens,
+                        Err(e) => {
+                            request.thread_ctx.reply(Err(RedisError::String(
+                                format!("ERR tokenization failed: {e:?}"),
+                            )));
+                            return;
+                        }
                     }
                 }
+            },
+        };
+
+        // Step 2: Run inference (seconds, GIL-free)
+        llama_ctx.clear_kv_cache();
+
+        let params = GenerateParams {
+            max_tokens: request.max_tokens,
+            temperature: request.temperature,
+            ..Default::default()
+        };
+
+        let result = generate_with_context(llama_ctx, &model.model, &tokens, &params);
+
+        // Step 3: Reply
+        match result {
+            Ok(text) => {
+                request.thread_ctx.reply(Ok(RedisValue::BulkString(text)));
+            }
+            Err(e) => {
+                request
+                    .thread_ctx
+                    .reply(Err(RedisError::String(format!("ERR {e}"))));
             }
         }
     }
